@@ -1,0 +1,24 @@
+{
+    "specversion":"1.0",
+    "id":"20741903-d0b2-4d86-90cf-4192b0e17462",
+    "source":"",
+    "type":"",
+    "subject":"/data/OpportunityChangeEvent",
+    "datacontenttype":"application/json",
+    "data":{
+      "ChangeEventHeader":{
+        "changeOrigin":"com/salesforce/api/soap/62.0;client=SfdcInternalAPI/",
+        "changeType":"UPDATE",
+        "changedFields":[ "0x01000080" ],
+        "commitNumber":1736877279422521345,
+        "commitTimestamp":1736877277000,
+        "commitUser":"005am000004KT8PAAW",
+        "diffFields":[ ],
+        "entityName":"Opportunity",
+        "nulledFields":[ ],
+        "recordIds":[ "006am000006pSAYAA2" ],
+        "sequenceNumber":1,
+        "transactionKey":"00001b0b-bd8a-108c-cdeb-2b85f1c4b7e3"
+      }
+    }
+}
