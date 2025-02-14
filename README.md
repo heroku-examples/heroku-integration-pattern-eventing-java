@@ -102,7 +102,7 @@ curl -X POST http://localhost:8080/api/generatequotes \
 
 Login to your Salesforce org and you should see a notification as shown below:
 
-<img src="images/notification.jpg" width="40%">
+<img src="images/notification1.jpg" width="40%">
 
 > [!NOTE]
 > For more information on how the notification above was handled review the next section before deploying.
@@ -156,7 +156,7 @@ Here is the platform event definition that was deployed to your org:
 
 <img src="images/platformevent.jpg" width="60%">
 
-# Deployment and Testing
+# Deployment and Bulk Event Testing
 
 > [!IMPORTANT]
 > Check you are not still running the application locally. If you want to start over at any time use `heroku destroy` to delete your app.
@@ -191,6 +191,7 @@ heroku events:authorizations:salesforce:create my-org
 heroku events:subscriptions:salesforce:create OpportunityChangeEvent -t "/data/OpportunityChangeEvent" -A my-org
 heroku events:publications:salesforce:create QuoteGenerationComplete -t "/event/QuoteGenerationComplete__e" -A my-org
 heroku events:publications:webhook:create QuoteGenerationWebHook -u "weburl/api/generatequotes" -s OpportunityChangeEvent
+heroku config:set CONNECTION_NAMES=my-org
 ```
 
 Next deploy the application and scale both the `web` and `worker` processes to run on a single dyno each.
@@ -209,7 +210,7 @@ Now trigger some Salesforce CDC events by making edits to one or more Opportunit
 
 In the above bulk edit 50 Opportunities had been updated, which resulted in a single notification as shown below:
 
-<img src="images/notification.jpg" width="40%">
+<img src="images/notification50.jpg" width="40%">
 
 You can also navigate to the **Quotes** tab in your org or one of the sample **Opportunities** to review the generated quotes. You can re-run the above steps as many times as you like it will simply keep adding **Quotes** to the edited Opportunities. It is also worth observing the Heroku logs as shown below:
 
@@ -238,8 +239,9 @@ Salesforce transmits a `transactionKey` with each Salesforce CDC event that has 
 - Events are not filtered in this sample, so any changes to **Opportunities** result in events triggering **Quote** generation. For example one could configure the subscription to only forward/stream events to the web hook when the `StageName` is of a certain value, e.g. `Proposal/Quote`. For more information see [here](https://devcenter.heroku.com/articles/getting-started-heroku-events#subscribe-to-platform-events-in-salesforce) and [here](https://devcenter.heroku.com/articles/heroku-events-cli#heroku-events-subscriptions-salesforce-create).
 - [Spring Boot Webflux](https://docs.spring.io/spring-framework/refernce/web/webflux.html) is used in this sample to allow for optimal use of compute resources for dispatching requests to the worker. This is a highly optimal way to implement Web Hooks that do minimal work in order to enqueue or buffer work. 
 - The class `PricingEngineService` implements the Web Hook that receives the subscribed Salesforce CDC events. It contains logic to group CDC events by their `transactionKey` and buffer them until events are received for a different transaction or 15 seconds have passed. The implementation of this approach is not designed for production, as it makes assumptions about the processing taking place in only one instance (Dyno) of the web worker. To implement this for production where by multiple web workers might be scaled up, a shared state approach should be used such as Redis to manage the buffer - precise details of this approach is outside the scope of this article. To learn more about `transactionKey` and best practices for handling it refer to [this](https://developer.salesforce.com/docs/atlas.en-us.change_data_capture.meta/change_data_capture/cdc_replication_steps.htm) article.
-- The class `PricingEngineService` contains logic to bulk create and destroy Opportunities. This logic is not currently used in this sample but retained. It is retained for future versions of this sample to illustrate much larger event volume handling. Follow this repo to monitor for changes in the future.
-- The web hook exposed by the `PricingEngineService` to the public internet (currently required) and does not have any authentication applied. Before deploying to production consider implementing authentication and leverage the `--token` parameter of the `events:publications:webhook:create` command accordingly. See [here](https://devcenter.heroku.com/articles/heroku-events-cli#heroku-events-subscriptions-salesforce-create) for more information.
+- The class `PricingEngineService.java` contains logic to bulk create and destroy Opportunities. This logic is not currently used in this sample but retained. It is retained for future versions of this sample to illustrate much larger event volume handling. Follow this repo to monitor for changes in the future.
+- The web hook exposed by the `PricingEngineService.java` class is exposed to the public internet (currently required) and does not have any authentication applied. Before deploying to production consider implementing authentication and leverage the `--token` parameter of the `events:publications:webhook:create` command accordingly. See [here](https://devcenter.heroku.com/articles/heroku-events-cli#heroku-events-subscriptions-salesforce-create) for more information.
+- The `CONNECTION_NAMES` environment variable is used by this sample to provide the alias of the connected Salesforce org given to the `salesforce:connect` command. See `SalesforceClient.java` for how its handled.
 
 Other Samples
 -------------

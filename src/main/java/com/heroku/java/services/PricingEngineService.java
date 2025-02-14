@@ -76,7 +76,7 @@ public class PricingEngineService {
     public Mono<DataJobResponse> datacreate(@RequestParam(defaultValue = "100") Integer numberOfOpportunities) {
         logger.info("Received Opportunity data creation request to create {} Opportunities", numberOfOpportunities);
         // Submit the job to the queue
-        String jobId = enqueJob("dataQueue", "create:" + numberOfOpportunities);
+        String jobId = enqueueJob("dataQueue", "create:" + numberOfOpportunities);
         DataJobResponse response = new DataJobResponse();
         response.jobId = jobId;
         return Mono.just(response);
@@ -89,7 +89,7 @@ public class PricingEngineService {
     public Mono<DataJobResponse> datadelete() {
         logger.info("Received Quote data deletion request");
         // Submit the job to the queue
-        String jobId = enqueJob("dataQueue", "delete");
+        String jobId = enqueueJob("dataQueue", "delete");
         DataJobResponse response = new DataJobResponse();
         response.jobId = jobId;
         return Mono.just(response);
@@ -123,7 +123,7 @@ public class PricingEngineService {
         List<String> recordIds = transactionCache.remove(transactionKey);
         String messageData = String.join(",", recordIds);
         logger.info("Enqueuing job for transactionKey: {} with records: {}", transactionKey, messageData);
-        String jobId = enqueJob("quoteQueue", messageData);
+        String jobId = enqueueJob("quoteQueue", messageData);
         logger.info("Job {} enqueued for transactionKey: {}", jobId, transactionKey);
     }
 
@@ -164,13 +164,13 @@ public class PricingEngineService {
     }
 
     /**
-     * Enque the job by posting a message to the given channel along with Salesforce connection details
+     * Enqueue the job by posting a message to the given channel along with Salesforce connection details
      * @param channel
      * @param message
      * @param httpServletRequest
      * @return
      */
-    private String enqueJob(String channel, String message) {
+    private String enqueueJob(String channel, String message) {
         // Generate a unique Job ID for this request
         String jobId = UUID.randomUUID().toString();
         // Get Salesforce session from Heroku Integration assume first connectoin declared
