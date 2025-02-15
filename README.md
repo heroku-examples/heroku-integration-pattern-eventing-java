@@ -208,7 +208,7 @@ Now trigger some Salesforce CDC events by making edits to one or more Opportunit
 <img src="images/editops.jpg" width="70%">
 <img src="images/editops2.jpg" width="70%">
 
-In the above bulk edit 50 Opportunities had been updated, which resulted in a single notification as shown below:
+The above bulk edit resulted in 50 Quotes being created, which is shown via a single notification as shown below:
 
 <img src="images/notification50.jpg" width="40%">
 
