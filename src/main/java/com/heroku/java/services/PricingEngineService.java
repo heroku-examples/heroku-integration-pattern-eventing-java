@@ -123,28 +123,16 @@ public class PricingEngineService {
     }
 
     /**
-     * Enqueue the job by posting a message to the given channel along with Salesforce connection details
+     * Enqueue the job by posting a message to the given channel
      * @param channel
      * @param message
-     * @param httpServletRequest
      * @return
      */
     private String enqueueJob(String channel, String message) {
         // Generate a unique Job ID for this request
         String jobId = UUID.randomUUID().toString();
-        // Get Salesforce session from Heroku Integration assume first connectoin declared
-        PartnerConnection connection = salesforceClient.getConnections().values().iterator().next();
-        if (connection == null) {
-            logger.error("Salesforce connection is not available.");
-            throw new RuntimeException("Salesforce connection is not available.");
-        }
         try {
-            // Store session info in Redis for the worker to use
-            String sessionId = connection.getSessionHeader().getSessionId();
-            String instanceUrl = connection.getConfig().getServiceEndpoint(); // Extract instance URL
-            redis.opsForValue().set("salesforce:session:" + jobId, sessionId);
-            redis.opsForValue().set("salesforce:instance:" + jobId, instanceUrl);
-            // Enqueue job
+            // Enqueue job - worker will authenticate fresh when processing
             redis.convertAndSend(channel, jobId + ":" + message);
             logger.info("Job enqueued with ID: {} for message: {} to channel: {}", jobId, message, channel);
 

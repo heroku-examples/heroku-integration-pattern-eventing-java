@@ -1,6 +1,6 @@
 package com.heroku.java.services;
 
-import com.sforce.soap.partner.Connector;
+import com.heroku.java.config.SalesforceClient;
 import com.sforce.soap.partner.PartnerConnection;
 import com.sforce.soap.partner.QueryResult;
 import com.sforce.soap.partner.SaveResult;
@@ -45,6 +45,9 @@ public class PricingEngineWorkerService implements MessageListener {
     @Autowired
     private RedisConnectionFactory redisConnectionFactory;
 
+    @Autowired
+    private SalesforceClient salesforceClient;
+
     @PostConstruct
     public void subscribeToRedisQueue() throws InterruptedException {
         logger.info("Worker subscribing to Redis queue: quoteQueue");
@@ -80,12 +83,10 @@ public class PricingEngineWorkerService implements MessageListener {
         logger.info("Worker executing batch for Job ID: {} with WHERE clause: {}", jobId, recordIds.toString());
 
         try {
-            // Recreate Salesforce connection
-            String sessionId = redis.opsForValue().get("salesforce:session:" + jobId);
-            String instanceUrl = redis.opsForValue().get("salesforce:instance:" + jobId);
-            PartnerConnection connection = createSalesforceConnection(sessionId, instanceUrl);
+            // Get fresh Salesforce connection using SalesforceClient
+            PartnerConnection connection = salesforceClient.getConnections().values().iterator().next();
             if (connection == null) {
-                logger.error("Failed to reconnect to Salesforce for Job ID: {}", jobId);
+                logger.error("Failed to get Salesforce connection for Job ID: {}", jobId);
                 return;
             }
 
@@ -202,23 +203,7 @@ public class PricingEngineWorkerService implements MessageListener {
         }
     }
 
-    /**
-     * Creates Salesforce WSC connection
-     * @param sessionId
-     * @param instanceUrl
-     * @return
-     */
-    private PartnerConnection createSalesforceConnection(String sessionId, String instanceUrl) {
-        try {
-            ConnectorConfig config = new ConnectorConfig();
-            config.setServiceEndpoint(instanceUrl);
-            config.setSessionId(sessionId);
-            return Connector.newConnection(config);
-        } catch (Exception e) {
-            logger.error("Error creating Salesforce connection: {}", e.getMessage(), e);
-            return null;
-        }
-    }
+
 
     /**
      * Ensures all records are retrieved by using query more
