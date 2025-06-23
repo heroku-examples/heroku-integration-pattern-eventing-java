@@ -35,15 +35,12 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
+import java.util.*;
+import java.util.concurrent.*;
 
 /**
  * Service that subscribes to Salesforce Change Data Capture events via Pub/Sub API
- * using gRPC and processes them through the existing PricingEngineService
+ * using gRPC and processes them through batching for optimal performance
  */
 @Service
 public class SalesforcePubSubSubscriber {
@@ -59,6 +56,16 @@ public class SalesforcePubSubSubscriber {
     @Value("${salesforce.pubsub.topic:/data/OpportunityChangeEvent}")
     private String pubSubTopic;
     
+    // Batching configuration
+    @Value("${salesforce.pubsub.batch.size:50}")
+    private int batchSize;
+    
+    @Value("${salesforce.pubsub.batch.timeout:5000}")
+    private long batchTimeoutMs;
+    
+    @Value("${salesforce.pubsub.fetch.size:100}")
+    private int fetchSize;
+    
     @Autowired
     private SalesforceClient salesforceClient;
     
@@ -70,6 +77,13 @@ public class SalesforcePubSubSubscriber {
     
     private ManagedChannel channel;
     private volatile boolean isSubscribed = false;
+    private volatile boolean batchProcessorRunning = true;
+    
+    // Batching infrastructure
+    private final BlockingQueue<ChangeDataCaptureEvent> eventQueue = new LinkedBlockingQueue<>();
+    private final ScheduledExecutorService batchProcessor = Executors.newScheduledThreadPool(2);
+    private final Map<String, List<ChangeDataCaptureEvent>> transactionBatches = new ConcurrentHashMap<>();
+    private volatile ScheduledFuture<?> batchTimeoutTask;
     
     /**
      * Start subscription when application is ready
@@ -77,7 +91,14 @@ public class SalesforcePubSubSubscriber {
     @EventListener(ApplicationReadyEvent.class)
     public void startSubscription() {
         if (shouldStartSubscription()) {
-            logger.info("Starting Salesforce Pub/Sub subscription...");
+            logger.info("Starting Salesforce Pub/Sub subscription with batching...");
+            logger.info("Batch configuration - Size: {}, Timeout: {}ms, Fetch: {}", 
+                       batchSize, batchTimeoutMs, fetchSize);
+            
+            // Start batch processing
+            startBatchProcessor();
+            
+            // Start Pub/Sub subscription
             CompletableFuture.runAsync(this::subscribeToOpportunityChangeEvents);
         }
     }
@@ -89,6 +110,171 @@ public class SalesforcePubSubSubscriber {
         // Only start subscription in web/default profile to avoid duplicate subscriptions
         String profiles = System.getProperty("spring.profiles.active", "");
         return !profiles.contains("worker");
+    }
+    
+    /**
+     * Start the batch processing system
+     */
+    private void startBatchProcessor() {
+        logger.info("Starting batch processor thread...");
+        // Size-based batch processor
+        batchProcessor.execute(() -> {
+            logger.info("Batch processor thread started and running");
+            List<ChangeDataCaptureEvent> batch = new ArrayList<>();
+            
+            while (batchProcessorRunning) {
+                try {
+                    // Collect events up to batch size
+                    ChangeDataCaptureEvent event = eventQueue.poll(1, TimeUnit.SECONDS);
+                    if (event != null) {
+                        logger.info("Batch processor received event from queue, batch size now: {}", batch.size() + 1);
+                        batch.add(event);
+                        
+                        // Process batch when it reaches the configured size
+                        if (batch.size() >= batchSize) {
+                            processBatch(new ArrayList<>(batch));
+                            batch.clear();
+                            cancelTimeoutTask();
+                        } else if (batch.size() == 1) {
+                            // Start timeout timer for first event in batch
+                            scheduleTimeoutTask(batch);
+                        }
+                    } else if (!batch.isEmpty()) {
+                        // Process remaining events when queue is empty
+                        processBatch(new ArrayList<>(batch));
+                        batch.clear();
+                        cancelTimeoutTask();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    logger.error("Error in batch processor: {}", e.getMessage(), e);
+                }
+            }
+            
+            // Process any remaining events
+            if (!batch.isEmpty()) {
+                processBatch(batch);
+            }
+        });
+    }
+    
+    /**
+     * Schedule timeout task to process batch after timeout period
+     */
+    private synchronized void scheduleTimeoutTask(List<ChangeDataCaptureEvent> batch) {
+        cancelTimeoutTask();
+        batchTimeoutTask = batchProcessor.schedule(() -> {
+            synchronized (this) {
+                if (!batch.isEmpty()) {
+                    logger.info("Processing batch due to timeout - Size: {}", batch.size());
+                    processBatch(new ArrayList<>(batch));
+                    batch.clear();
+                }
+            }
+        }, batchTimeoutMs, TimeUnit.MILLISECONDS);
+    }
+    
+    /**
+     * Cancel the current timeout task
+     */
+    private synchronized void cancelTimeoutTask() {
+        if (batchTimeoutTask != null && !batchTimeoutTask.isDone()) {
+            batchTimeoutTask.cancel(false);
+            batchTimeoutTask = null;
+        }
+    }
+    
+    /**
+     * Process a batch of CDC events with transaction grouping
+     */
+    private void processBatch(List<ChangeDataCaptureEvent> events) {
+        if (events.isEmpty()) {
+            return;
+        }
+        
+        logger.info("Processing batch of {} CDC events", events.size());
+        
+        // Group events by transaction key for optimal processing
+        Map<String, List<ChangeDataCaptureEvent>> transactionGroups = new HashMap<>();
+        List<ChangeDataCaptureEvent> orphanEvents = new ArrayList<>();
+        
+        for (ChangeDataCaptureEvent event : events) {
+            String transactionKey = event.ChangeEventHeader != null ? 
+                                  event.ChangeEventHeader.transactionKey : null;
+            
+            if (transactionKey != null) {
+                transactionGroups.computeIfAbsent(transactionKey, k -> new ArrayList<>()).add(event);
+            } else {
+                orphanEvents.add(event);
+            }
+        }
+        
+        // Process transaction groups
+        for (Map.Entry<String, List<ChangeDataCaptureEvent>> entry : transactionGroups.entrySet()) {
+            String transactionKey = entry.getKey();
+            List<ChangeDataCaptureEvent> transactionEvents = entry.getValue();
+            
+            logger.info("Processing transaction group: {} with {} events", 
+                       transactionKey, transactionEvents.size());
+            
+            // Merge events from same transaction for optimal processing
+            ChangeDataCaptureEvent mergedEvent = mergeTransactionEvents(transactionEvents);
+            if (mergedEvent != null) {
+                pricingEngineService.processChangeDataCaptureEvent(mergedEvent);
+            }
+        }
+        
+        // Process orphan events individually
+        for (ChangeDataCaptureEvent orphanEvent : orphanEvents) {
+            logger.info("Processing orphan event without transaction key");
+            pricingEngineService.processChangeDataCaptureEvent(orphanEvent);
+        }
+        
+        logger.info("Completed batch processing - {} transaction groups, {} orphan events", 
+                   transactionGroups.size(), orphanEvents.size());
+    }
+    
+    /**
+     * Merge multiple events from the same transaction into a single optimized event
+     */
+    private ChangeDataCaptureEvent mergeTransactionEvents(List<ChangeDataCaptureEvent> events) {
+        if (events.isEmpty()) {
+            return null;
+        }
+        
+        if (events.size() == 1) {
+            return events.get(0);
+        }
+        
+        // Use the first event as base and merge record IDs
+        ChangeDataCaptureEvent mergedEvent = events.get(0);
+        Set<String> allRecordIds = new HashSet<>();
+        Set<String> allChangedFields = new HashSet<>();
+        
+        for (ChangeDataCaptureEvent event : events) {
+            if (event.ChangeEventHeader != null) {
+                // Collect all record IDs
+                if (event.ChangeEventHeader.recordIds != null) {
+                    allRecordIds.addAll(Arrays.asList(event.ChangeEventHeader.recordIds));
+                }
+                
+                // Collect all changed fields
+                if (event.ChangeEventHeader.changedFields != null) {
+                    allChangedFields.addAll(Arrays.asList(event.ChangeEventHeader.changedFields));
+                }
+            }
+        }
+        
+        // Update merged event with consolidated data
+        mergedEvent.ChangeEventHeader.recordIds = allRecordIds.toArray(new String[0]);
+        mergedEvent.ChangeEventHeader.changedFields = allChangedFields.toArray(new String[0]);
+        
+        logger.debug("Merged {} events into single event with {} record IDs", 
+                    events.size(), allRecordIds.size());
+        
+        return mergedEvent;
     }
     
     /**
@@ -122,10 +308,10 @@ public class SalesforcePubSubSubscriber {
             logger.info("Using instance URL: {}", baseInstanceUrl);
             logger.info("Using access token: {}...", accessToken.substring(0, Math.min(10, accessToken.length())));
             
-                         // Create gRPC channel
-             channel = ManagedChannelBuilder.forAddress(pubSubHost, pubSubPort)
-                     .useTransportSecurity()
-                     .build();
+            // Create gRPC channel
+            channel = ManagedChannelBuilder.forAddress(pubSubHost, pubSubPort)
+                    .useTransportSecurity()
+                    .build();
             
             // Set up authentication metadata with correct header names (case-sensitive!)
             Metadata metadata = new Metadata();
@@ -133,12 +319,10 @@ public class SalesforcePubSubSubscriber {
             metadata.put(Metadata.Key.of("instanceUrl", Metadata.ASCII_STRING_MARSHALLER), baseInstanceUrl);
             metadata.put(Metadata.Key.of("tenantId", Metadata.ASCII_STRING_MARSHALLER), tenantId);
             
-            // TODO: Implement actual gRPC subscription using Salesforce Pub/Sub API protobuf definitions
-            // This is a placeholder for the actual implementation
-                         logger.info("Pub/Sub subscription setup initiated for topic: {}", pubSubTopic);
+            logger.info("Pub/Sub subscription setup initiated for topic: {}", pubSubTopic);
             isSubscribed = true;
             
-            // Simulate subscription loop (replace with actual gRPC streaming call)
+            // Start subscription loop with batching
             subscriptionLoop(metadata);
             
         } catch (Exception e) {
@@ -150,7 +334,7 @@ public class SalesforcePubSubSubscriber {
      * Main subscription loop using actual Salesforce Pub/Sub API gRPC streaming
      */
     private void subscriptionLoop(Metadata metadata) {
-        logger.info("Starting subscription loop for Opportunity CDC events");
+        logger.info("Starting subscription loop for Opportunity CDC events with batching");
         
         // Create Pub/Sub stub with authentication metadata
         PubSubGrpc.PubSubStub pubSubStub = PubSubGrpc.newStub(channel)
@@ -165,7 +349,7 @@ public class SalesforcePubSubSubscriber {
             public void onNext(FetchResponse response) {
                 logger.info("Received {} events from Pub/Sub API", response.getEventsCount());
                 
-                // Process each event
+                // Process each event and add to batch queue
                 for (ConsumerEvent consumerEvent : response.getEventsList()) {
                     try {
                         // Extract Avro payload from the event
@@ -175,7 +359,12 @@ public class SalesforcePubSubSubscriber {
                         // Get the schema for this schema ID
                         Schema avroSchema = getSchemaById(schemaId);
                         if (avroSchema != null) {
-                            processAvroEvent(avroData, avroSchema);
+                            // Convert to CDC event and add to batch queue
+                            ChangeDataCaptureEvent cdcEvent = processAvroEvent(avroData, avroSchema);
+                            if (cdcEvent != null) {
+                                logger.info("Adding CDC event to batch queue, queue size: {}", eventQueue.size() + 1);
+                                eventQueue.offer(cdcEvent);
+                            }
                         } else {
                             logger.error("Could not retrieve schema for ID: {}", schemaId);
                         }
@@ -185,10 +374,10 @@ public class SalesforcePubSubSubscriber {
                     }
                 }
                 
-                // Request more events
+                // Request more events with larger fetch size for better batching
                 if (isSubscribed && response.getPendingNumRequested() == 0) {
                     FetchRequest nextRequest = FetchRequest.newBuilder()
-                            .setNumRequested(10)
+                            .setNumRequested(fetchSize)
                             .build();
                     if (requestObserverRef[0] != null) {
                         requestObserverRef[0].onNext(nextRequest);
@@ -219,11 +408,11 @@ public class SalesforcePubSubSubscriber {
         // Store reference for inner class access
         requestObserverRef[0] = requestObserver;
         
-        // Send initial subscription request
+        // Send initial subscription request with larger fetch size
         FetchRequest initialRequest = FetchRequest.newBuilder()
                 .setTopicName(pubSubTopic)
                 .setReplayPreset(ReplayPreset.LATEST)
-                .setNumRequested(10)
+                .setNumRequested(fetchSize)
                 .build();
         
         requestObserver.onNext(initialRequest);
@@ -309,25 +498,23 @@ public class SalesforcePubSubSubscriber {
     }
 
     /**
-     * Process Avro event and convert to CDC event for existing processing logic
+     * Process Avro event and convert to CDC event for batching
      */
-    public void processAvroEvent(byte[] avroData, Schema schema) {
+    public ChangeDataCaptureEvent processAvroEvent(byte[] avroData, Schema schema) {
         try {
             // Deserialize Avro data
             GenericDatumReader<GenericRecord> reader = new GenericDatumReader<>(schema);
             BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(avroData, null);
             GenericRecord record = reader.read(null, decoder);
             
-            logger.info("Received Avro event: {}", record.toString());
+            logger.debug("Received Avro event: {}", record.toString());
             
-            // Convert Avro record to CDC event for direct processing
-            ChangeDataCaptureEvent cdcEvent = convertAvroToCDCEvent(record);
-            
-            // Process through existing logic
-            pricingEngineService.processChangeDataCaptureEvent(cdcEvent);
+            // Convert Avro record to CDC event for batching
+            return convertAvroToCDCEvent(record);
             
         } catch (Exception e) {
             logger.error("Error processing Avro event: {}", e.getMessage(), e);
+            return null;
         }
     }
     
@@ -399,8 +586,38 @@ public class SalesforcePubSubSubscriber {
     
     @PreDestroy
     public void shutdown() {
-        logger.info("Shutting down Pub/Sub subscription...");
+        logger.info("Shutting down Pub/Sub subscription and batch processor...");
         isSubscribed = false;
+        batchProcessorRunning = false;
+        
+        // Cancel any pending timeout tasks
+        cancelTimeoutTask();
+        
+        // Shutdown batch processor
+        if (batchProcessor != null && !batchProcessor.isShutdown()) {
+            try {
+                batchProcessor.shutdown();
+                if (!batchProcessor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    logger.warn("Batch processor did not terminate within 10 seconds, forcing shutdown");
+                    batchProcessor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                batchProcessor.shutdownNow();
+            }
+        }
+        
+        // Process any remaining events in queue
+        if (!eventQueue.isEmpty()) {
+            logger.info("Processing {} remaining events in queue during shutdown", eventQueue.size());
+            List<ChangeDataCaptureEvent> remainingEvents = new ArrayList<>();
+            eventQueue.drainTo(remainingEvents);
+            if (!remainingEvents.isEmpty()) {
+                processBatch(remainingEvents);
+            }
+        }
+        
+        // Shutdown gRPC channel
         if (channel != null && !channel.isShutdown()) {
             try {
                 channel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
@@ -409,6 +626,8 @@ public class SalesforcePubSubSubscriber {
                 channel.shutdownNow();
             }
         }
+        
+        logger.info("Pub/Sub subscription and batch processor shutdown complete");
     }
     
 

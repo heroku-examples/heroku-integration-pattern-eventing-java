@@ -181,8 +181,19 @@ public class PricingEngineWorkerService implements MessageListener {
                 }
             }
 
-            // Step 6: Log completion (notification functionality removed as part of Pub/Sub migration)
-            logger.info("Quotes generated: {}", quoteSaveResults.size());
+            // Step 6: Send platform event notification
+            try {
+                SObject platformEvent = new SObject("QuoteGenerationComplete__e");
+                platformEvent.setField("Status__c", "Quotes Generated: " + quoteSaveResults.size());
+                SaveResult[] eventResults = connection.create(new SObject[]{platformEvent});
+                if (eventResults[0].isSuccess()) {
+                    logger.info("Platform event sent successfully: QuoteGenerationComplete__e");
+                } else {
+                    logger.error("Failed to send platform event: {}", eventResults[0].getErrors()[0].getMessage());
+                }
+            } catch (Exception e) {
+                logger.error("Error sending platform event: {}", e.getMessage(), e);
+            }
 
             logger.info("Job processing completed for Job ID: {}", jobId);
 
