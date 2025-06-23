@@ -126,10 +126,6 @@ public class PricingEngineService {
         }
     }
 
-
-
-
-
     /**
      * Enqueue the job by posting a message to the given channel along with Salesforce connection details
      * @param channel

@@ -1,4 +1,4 @@
-Heroku AppLink - Using Pub/Sub API to drive Automation and Communication (Java)
+Heroku AppLink - Using Eventing to drive Automation and Communication (Java)
 ===============================================================================
 
 > [!IMPORTANT]
@@ -21,12 +21,10 @@ Technically speaking, this sample shares much of the same setup as the one menti
 
 # Requirements
 - Heroku login
-- Heroku AppLink Pilot enabled
 - Heroku CLI installed
-- Heroku AppLink Pilot CLI plugin is installed
+- Heroku AppLink plugin is installed
 - Salesforce CLI installed
 - Login information for one or more Scratch, Development or Sandbox orgs
-- Watch the [Introduction to the Heroku AppLink Pilot for Developers](https://www.youtube.com/watch?v=T5kOGNuTCLE) video 
 
 # Setting up your Salesforce Org
 
@@ -58,7 +56,7 @@ Even though we are running and testing locally, we will still configure required
 heroku create
 heroku addons:create heroku-redis:mini --wait
 heroku addons:create heroku-applink --wait
-heroku salesforce:connect my-org --store-as-run-as-user
+heroku salesforce:authorizations:add my-org
 heroku config:set CONNECTION_NAMES=my-org
 heroku config --shell > .env
 mvn clean package
@@ -115,9 +113,12 @@ Login to your Salesforce org and you should see a notification as shown below:
 Observe the logs from the `heroku local` command and you will see the CDC events were received via Pub/Sub, batched, and processed:
 
 ```
-web.1 | SalesforcePubSubSubscriber : Received CDC event, adding to batch queue
-web.1 | SalesforcePubSubSubscriber : Processing batch of 5 CDC events
-web.1 | SalesforcePubSubSubscriber : Processing transaction group with 5 events
+web.1 | SalesforcePubSubService : Starting Salesforce Pub/Sub subscription...
+web.1 | SalesforcePubSubService : Connecting to Salesforce Pub/Sub API for tenant: 00Dam00000ecSlDEAU
+web.1 | PricingEngineService : Processing CDC event for entity: Opportunity, changeType: UPDATE
+web.1 | PricingEngineService : Processed CDC event with transaction key: 00001b0b-bd8a-108c-cdeb-2b85f1c4b7e3
+web.1 | PricingEngineService : Enqueuing job for transactionKey: 00001b0b-bd8a-108c-cdeb-2b85f1c4b7e3 with records: 006am000006pSAYAA2,006am000006pSAYAA3,006am000006pSAYAA4,006am000006pSAYAA5,006am000006pSAYAA6
+web.1 | PricingEngineService : Job enqueued with ID: ce9dd4bd-8544-422b-8879-c7a30e36176b for message: 006am000006pSAYAA2,006am000006pSAYAA3,006am000006pSAYAA4,006am000006pSAYAA5,006am000006pSAYAA6 to channel: quoteQueue
 worker.1 | PricingEngineWorkerService : Worker received job with ID: 2966bc35-c14e-4d9a-9a8e-ed74ce57b3e9
 worker.1 | PricingEngineWorkerService : Processing 5 Opportunities
 worker.1 | PricingEngineWorkerService : Performing bulk insert for 5 Quotes
@@ -175,11 +176,11 @@ heroku addons:create heroku-applink --wait
 Next ensure that the add-on is connected to your Salesforce org:
 
 ```
-heroku salesforce:connect my-org --store-as-run-as-user
+heroku salesforce:authorizations:add my-org
 heroku config:set CONNECTION_NAMES=my-org
 ```
 
-Next deploy the application and scale both the `web` and `worker` processes to run on a single dyno each.
+Next deploy the application and scale both the `web` and `worker` processes to run on a single dyno each. If your worker is not scaling, login to the Heroku Dashboard and check the configuration of the Dyno allows it.
 
 ```
 git push heroku main
@@ -200,12 +201,14 @@ The above bulk edit resulted in 50 Quotes being created, which is shown via a si
 You can also navigate to the **Quotes** tab in your org or one of the sample **Opportunities** to review the generated quotes. You can re-run the above steps as many times as you like it will simply keep adding **Quotes** to the edited Opportunities. It is also worth observing the Heroku logs as shown below:
 
 ```
-web.1 SalesforcePubSubSubscriber : Connecting to Salesforce Pub/Sub API
-web.1 SalesforcePubSubSubscriber : Starting subscription loop for Opportunity CDC events with batching
-web.1 SalesforcePubSubSubscriber : Received CDC event, adding to batch queue
-web.1 SalesforcePubSubSubscriber : Processing batch of 50 CDC events
-web.1 SalesforcePubSubSubscriber : Processing transaction group with 50 events
-web.1 SalesforcePubSubSubscriber : Merged 50 events into single event with 50 record IDs
+web.1 SalesforcePubSubService : Connecting to Salesforce Pub/Sub API for tenant: 00Dam00000ecSlDEAU
+web.1 SalesforcePubSubService : Starting subscription loop for Opportunity CDC events
+web.1 SalesforcePubSubService : Received 49 events from Pub/Sub API
+web.1 PricingEngineService : Processing CDC event for entity: Opportunity, changeType: UPDATE
+web.1 PricingEngineService : Processed CDC event with transaction key: 0000aecf-58f7-e513-929b-04259321a0cc
+web.1 PricingEngineService : Enqueuing job for transactionKey: 0000aecf-58f7-e513-929b-04259321a0cc with records: 006am000006pSAYAA2,006am000006pSAYAA3,...
+web.1 PricingEngineService : Job enqueued with ID: 8efeda4e-f1fd-4907-a26d-98cd7553d899 for message: 006am000006pSAYAA2,006am000006pSAYAA3,... to channel: quoteQueue
+worker.1 PricingEngineWorkerService  : Worker received job with ID: 8efeda4e-f1fd-4907-a26d-98cd7553d899
 worker.1 PricingEngineWorkerService  : Processing 50 Opportunities
 worker.1 PricingEngineWorkerService  : Performing bulk insert for 50 Quotes
 worker.1 PricingEngineWorkerService  : Creating records from index 0 to 49 (50 records)
@@ -218,12 +221,12 @@ Salesforce transmits a `transactionKey` with each Salesforce CDC event that has 
 
 # Technical Information
 
-- The application connects directly to the Salesforce Pub/Sub API using gRPC to receive Change Data Capture events in real-time. The **Heroku AppLink** add-on is used for authentication. Notably the `--store-as-run-as-user` CLI parameter is used when connecting the Salesforce org. This allows the worker jobs to request a Salesforce org authentication for their processing. Note that in constrast with the [batch job sample](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) this user is not necessarily the user that triggered the events. It is important to ensure the user used has all the applicable permissions to perform the work required.
-- Events are not filtered in this sample, so any changes to **Opportunities** result in CDC events triggering **Quote** generation. The Pub/Sub API supports filtering, so you could configure the subscription to only process events when the `StageName` is of a certain value, e.g. `Proposal/Quote`. This would be implemented in the `SalesforcePubSubSubscriber` class.
+- The application connects directly to the Salesforce Pub/Sub API using gRPC to receive Change Data Capture events in real-time. The **Heroku AppLink** add-on is used for authentication. This allows the worker jobs to request a Salesforce org authentication for their processing. Note that in constrast with the [batch job sample](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) this user is not necessarily the user that triggered the events. It is important to ensure the user used has all the applicable permissions to perform the work required.
+- Events are not filtered in this sample, so any changes to **Opportunities** result in CDC events triggering **Quote** generation. The Pub/Sub API supports filtering, so you could configure the subscription to only process events when the `StageName` is of a certain value, e.g. `Proposal/Quote`. This would be implemented in the `SalesforcePubSubService` class.
 - [Spring Boot](https://spring.io/projects/spring-boot) is used in this sample to provide a robust web application framework for managing the Pub/Sub subscription and job processing.
-- The class `SalesforcePubSubSubscriber` implements the Pub/Sub gRPC client that receives the subscribed Salesforce CDC events. It contains logic to group CDC events by their `transactionKey` and buffer them using configurable batching strategies (size-based, time-based, and transaction-based). The implementation includes proper thread management and graceful shutdown handling.
-- The class `PricingEngineService.java` contains logic to bulk create and destroy Opportunities. This logic is used for testing the sample with sample data creation and cleanup.
-- The `CONNECTION_NAMES` environment variable is used by this sample to provide the alias of the connected Salesforce org given to the `salesforce:connect` command. See `SalesforceClient.java` for how its handled.
+- The class `SalesforcePubSubService` implements the Pub/Sub gRPC client that receives the subscribed Salesforce CDC events and passes them to `PricingEngineService.java`.
+- The class `PricingEngineService.java` contains logic to bulk create and destroy Opportunities. This logic is used for testing the sample with sample data creation and cleanup. It also batches up work for more optimal bulk processing within one transaction of CDC events received from Salesforce.
+- The `CONNECTION_NAMES` environment variable is used by this sample to provide the alias of the connected Salesforce org given to the `salesforce:authorizations:add` command. See `SalesforceClient.java` for how its handled.
 
 Other Samples
 -------------
@@ -233,4 +236,4 @@ Other Samples
 | [Salesforce API Access - Java](https://github.com/heroku-examples/heroku-integration-pattern-api-access-java) | This sample application showcases how to extend a Heroku web application by integrating it with Salesforce APIs, enabling seamless data exchange and automation across multiple connected Salesforce orgs. It also includes a demonstration of the Salesforce Bulk API, which is optimized for handling large data volumes efficiently. |
 | [Extending Apex, Flow and Agentforce - Java](https://github.com/heroku-examples/heroku-integration-pattern-org-action-java) | This sample demonstrates importing a Heroku application into an org to enable Apex, Flow, and Agentforce to call out to Heroku. For Apex, both synchronous and asynchronous invocation are demonstrated, along with securely elevating Salesforce permissions for processing that requires additional object or field access. |
 | [Scaling Batch Jobs with Heroku - Java](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) | This sample seamlessly delegates the processing of large amounts of data with significant compute requirements to Heroku Worker processes. It also demonstrates the use of the Unit of Work aspect of the SDK (JavaScript only for the pilot) for easier utilization of the Salesforce Composite APIs. |
-| [Using Pub/Sub API to drive Automation and Communication](https://github.com/heroku-examples/heroku-integration-pattern-eventing-java) | This sample extends the batch job sample by adding the ability to use Salesforce Change Data Capture events via the Pub/Sub API to start the work and notify users once it completes using Custom Notifications. These notifications are sent to the user's desktop or mobile device running Salesforce Mobile. Flow is used in this sample to demonstrate how processing can be handed off to low-code tools such as Flow. |
+| [Using Eventing to drive Automation and Communication - Java](https://github.com/heroku-examples/heroku-integration-pattern-eventing-java) | This sample extends the batch job sample by adding the ability to use Salesforce Change Data Capture events via the Pub/Sub API to start the work and notify users once it completes using Custom Notifications. These notifications are sent to the user's desktop or mobile device running Salesforce Mobile. Flow is used in this sample to demonstrate how processing can be handed off to low-code tools such as Flow. |
