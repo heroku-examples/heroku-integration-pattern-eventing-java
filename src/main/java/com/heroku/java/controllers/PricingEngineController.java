@@ -96,7 +96,7 @@ public class PricingEngineController {
             com.heroku.java.model.ChangeDataCaptureEvent changeEvent = convertToChangeEvent(cdcEvent);
             
             // Process the event directly through the PricingEngineService
-            pricingEngineService.processChangeDataCaptureEvent(changeEvent);
+            pricingEngineService.generateQuote(changeEvent);
             
             Map<String, String> response = new HashMap<>();
             response.put("message", "CDC event processed successfully");

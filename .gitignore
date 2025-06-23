@@ -40,4 +40,4 @@ build/
 !downloads/test.png
 
 ### Mac files
-.DS_Store
+.DS_Store*.class

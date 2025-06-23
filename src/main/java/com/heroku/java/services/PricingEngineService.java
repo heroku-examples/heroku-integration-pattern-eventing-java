@@ -5,8 +5,6 @@ import com.heroku.java.config.SalesforceClient;
 import com.heroku.java.model.ChangeDataCaptureEvent;
 import com.sforce.soap.partner.PartnerConnection;
 
-import reactor.core.publisher.Mono;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,7 +12,6 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -43,11 +40,11 @@ public class PricingEngineService {
     private volatile String lastTransactionKey = null;
 
     /**
-     * Process Salesforce CDC events received from Pub/Sub API subscription
-     * Called directly by SalesforcePubSubSubscriber service
+     * Generate quotes for opportunities based on CDC events
+     * Called when opportunities are updated and need quote generation
      * @param changeEvent The CDC event containing Opportunity change data
      */
-    public void processChangeDataCaptureEvent(ChangeDataCaptureEvent changeEvent) {
+    public void generateQuote(ChangeDataCaptureEvent changeEvent) {
         logger.info("Processing CDC event for entity: {}, changeType: {}", 
                    changeEvent.ChangeEventHeader.entityName, 
                    changeEvent.ChangeEventHeader.changeType);

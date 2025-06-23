@@ -72,9 +72,6 @@ public class SalesforcePubSubSubscriber {
     @Autowired
     private PricingEngineService pricingEngineService;
     
-    @Autowired
-    private ObjectMapper objectMapper;
-    
     private ManagedChannel channel;
     private volatile boolean isSubscribed = false;
     private volatile boolean batchProcessorRunning = true;
@@ -82,7 +79,6 @@ public class SalesforcePubSubSubscriber {
     // Batching infrastructure
     private final BlockingQueue<ChangeDataCaptureEvent> eventQueue = new LinkedBlockingQueue<>();
     private final ScheduledExecutorService batchProcessor = Executors.newScheduledThreadPool(2);
-    private final Map<String, List<ChangeDataCaptureEvent>> transactionBatches = new ConcurrentHashMap<>();
     private volatile ScheduledFuture<?> batchTimeoutTask;
     
     /**
@@ -222,14 +218,14 @@ public class SalesforcePubSubSubscriber {
             // Merge events from same transaction for optimal processing
             ChangeDataCaptureEvent mergedEvent = mergeTransactionEvents(transactionEvents);
             if (mergedEvent != null) {
-                pricingEngineService.processChangeDataCaptureEvent(mergedEvent);
+                                    pricingEngineService.generateQuote(mergedEvent);
             }
         }
         
         // Process orphan events individually
         for (ChangeDataCaptureEvent orphanEvent : orphanEvents) {
             logger.info("Processing orphan event without transaction key");
-            pricingEngineService.processChangeDataCaptureEvent(orphanEvent);
+                            pricingEngineService.generateQuote(orphanEvent);
         }
         
         logger.info("Completed batch processing - {} transaction groups, {} orphan events", 
@@ -341,7 +337,8 @@ public class SalesforcePubSubSubscriber {
                 .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(metadata));
         
         // Store reference for inner class access
-        final StreamObserver<FetchRequest>[] requestObserverRef = new StreamObserver[1];
+        @SuppressWarnings("unchecked")
+        final StreamObserver<FetchRequest>[] requestObserverRef = (StreamObserver<FetchRequest>[]) new StreamObserver[1];
         
         // Create bidirectional streaming call
         StreamObserver<FetchRequest> requestObserver = pubSubStub.subscribe(new StreamObserver<FetchResponse>() {
