@@ -16,21 +16,55 @@ import java.util.Map;
 @Component
 public class SalesforceClient {
 
-    @Value("${HEROKU_INTEGRATION_API_URL:#{null}}")
+    @Value("${HEROKU_APPLINK_API_URL:#{null}}")
     private String integrationApiUrl;
 
-    @Value("${HEROKU_INTEGRATION_TOKEN:#{null}}")
+    @Value("${HEROKU_APPLINK_TOKEN:#{null}}")
     private String invocationsToken;
 
     @Value("${CONNECTION_NAMES:#{null}}")
     private String connectionNames;
 
+    @Value("${HEROKU_APP_ID:#{null}}")
+    private String herokuAppId;
+
+    // Manual SF CLI authentication (for debugging)
+    @Value("${SF_SESSION_ID:#{null}}")
+    private String sfSessionId;
+
+    @Value("${SF_INSTANCE_URL:#{null}}")
+    private String sfInstanceUrl;
+
+    @Value("${SF_API_VERSION:59.0}")
+    private String sfApiVersion;
+
+    @Value("${SF_ORG_ID:#{null}}")
+    private String sfOrgId;
+
     private final Map<String, PartnerConnection> connections = new HashMap<>();
 
     @PostConstruct
     public void initializeConnections() {
+        // Check if manual SF CLI auth is available
+        if (sfSessionId != null && sfInstanceUrl != null) {
+            System.out.println("Using manual SF CLI authentication for debugging");
+            try {
+                PartnerConnection connection = createManualConnection();
+                // Use the first connection name or default to "debug"
+                String connectionName = "debug";
+                if (connectionNames != null && !connectionNames.trim().isEmpty()) {
+                    connectionName = connectionNames.split(",")[0].trim();
+                }
+                connections.put(connectionName, connection);
+                return;
+            } catch (Exception e) {
+                System.err.println("Failed to create manual SF connection, falling back to AppLink: " + e.getMessage());
+            }
+        }
+
+        // Fall back to AppLink authentication
         if (integrationApiUrl == null || invocationsToken == null || connectionNames == null) {
-            throw new IllegalStateException("Heroku Integration environment variables are not set properly.");
+            throw new IllegalStateException("Neither manual SF CLI auth nor Heroku AppLink environment variables are set properly.");
         }
         String[] connectionNameArray = connectionNames.split(",");
         for (String connectionName : connectionNameArray) {
@@ -45,31 +79,50 @@ public class SalesforceClient {
         }
     }
 
-    private PartnerConnection createConnection(String connectionName) throws ConnectionException {
-        // Prepare request payload
-        Map<String, String> requestBody = Map.of("org_name", connectionName);
+    private PartnerConnection createManualConnection() throws ConnectionException {
+        ConnectorConfig config = new ConnectorConfig();
+        config.setServiceEndpoint(sfInstanceUrl + "/services/Soap/u/" + sfApiVersion);
+        config.setSessionId(sfSessionId);
+        return new PartnerConnection(config);
+    }
+
+    private PartnerConnection createConnection(String developerName) throws ConnectionException {
+        if (developerName == null || developerName.isEmpty()) {
+            throw new IllegalArgumentException("Developer name not provided");
+        }
+        
+        // Prepare headers
         HttpHeaders headers = new HttpHeaders();
         headers.set("Authorization", "Bearer " + invocationsToken);
+        headers.set("X-App-UUID", herokuAppId);
         headers.setContentType(MediaType.APPLICATION_JSON);
-        HttpEntity<Map<String, String>> entity = new HttpEntity<>(requestBody, headers);
+        HttpEntity<?> entity = new HttpEntity<>(headers);
 
         // Make the REST call to get auth details
-        String authUrl = integrationApiUrl + "/invocations/authorization";
+        String authUrl = integrationApiUrl + "/authorizations/" + developerName;
         ResponseEntity<Map<String, Object>> response = new RestTemplate().exchange(
-            authUrl, HttpMethod.POST, entity, new ParameterizedTypeReference<>() {}
+            authUrl, HttpMethod.GET, entity, new ParameterizedTypeReference<>() {}
         );
-        if (response.getBody() == null || !response.getBody().containsKey("access_token")) {
-            throw new IllegalStateException("Invalid response from Salesforce Integration API.");
+        
+        if (response.getBody() == null || !response.getBody().containsKey("org")) {
+            throw new IllegalStateException("Invalid response from Heroku AppLink API.");
         }
 
+        // Extract org data from nested response structure
+        @SuppressWarnings("unchecked")
+        Map<String, Object> org = (Map<String, Object>) response.getBody().get("org");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> userAuth = (Map<String, Object>) org.get("user_auth");
+
         // Retrieve authentication details
-        String accessToken = (String) response.getBody().get("access_token");
-        String apiVersion = (String) response.getBody().get("api_version");
-        String orgDomainUrl = (String) response.getBody().get("org_domain_url");
+        String accessToken = (String) userAuth.get("access_token");
+        String apiVersion = (String) org.get("api_version");
+        String orgDomainUrl = (String) org.get("instance_url");
 
         // Configure and create Salesforce PartnerConnection
         ConnectorConfig config = new ConnectorConfig();
-        config.setServiceEndpoint(orgDomainUrl + "/services/Soap/u/" + apiVersion.replaceFirst("^v", ""));
+        String cleanApiVersion = apiVersion.replaceFirst("^v", "");
+        config.setServiceEndpoint(orgDomainUrl + "/services/Soap/u/" + cleanApiVersion);
         config.setSessionId(accessToken);
         return new PartnerConnection(config);
     }
@@ -83,5 +136,9 @@ public class SalesforceClient {
 
     public Map<String, PartnerConnection> getConnections() {
         return new HashMap<>(connections);
+    }
+
+    public String getOrgId() {
+        return sfOrgId;
     }
 }

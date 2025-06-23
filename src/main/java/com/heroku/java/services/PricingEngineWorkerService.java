@@ -1,6 +1,5 @@
 package com.heroku.java.services;
 
-import com.heroku.java.config.HerokuEventsClient;
 import com.sforce.soap.partner.Connector;
 import com.sforce.soap.partner.PartnerConnection;
 import com.sforce.soap.partner.QueryResult;
@@ -45,9 +44,6 @@ public class PricingEngineWorkerService implements MessageListener {
 
     @Autowired
     private RedisConnectionFactory redisConnectionFactory;
-
-    @Autowired
-    private HerokuEventsClient herokuEventsClient;
 
     @PostConstruct
     public void subscribeToRedisQueue() throws InterruptedException {
@@ -185,12 +181,8 @@ public class PricingEngineWorkerService implements MessageListener {
                 }
             }
 
-            // Step 6: Send notificaiton back to the Salesforce Org            
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("Status__c", Map.of("string", String.format("Quotes Generated: %s", quoteSaveResults.size())));
-            payload.put("CreatedById", connection.getUserInfo().getUserId());
-            payload.put("CreatedDate", System.currentTimeMillis());        
-            herokuEventsClient.publish(payload, "QuoteGenerationComplete");
+            // Step 6: Log completion (notification functionality removed as part of Pub/Sub migration)
+            logger.info("Quotes generated: {}", quoteSaveResults.size());
 
             logger.info("Job processing completed for Job ID: {}", jobId);
 

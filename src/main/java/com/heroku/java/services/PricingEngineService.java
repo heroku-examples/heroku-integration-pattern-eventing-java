@@ -2,19 +2,17 @@ package com.heroku.java.services;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.heroku.java.config.SalesforceClient;
+import com.heroku.java.model.ChangeDataCaptureEvent;
 import com.sforce.soap.partner.PartnerConnection;
 
-import io.cloudevents.CloudEvent;
 import reactor.core.publisher.Mono;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.server.ResponseStatusException;
+import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -22,10 +20,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Exposed REST endpoints to Salesforce that will enqueue jobs to generate Quotes and manage sample data
+ * Service that processes Salesforce CDC events and manages job queuing for quote generation and sample data
  */
-@RestController
-@RequestMapping("/api/")
+@Service
 public class PricingEngineService {
 
     private static final Logger logger = LoggerFactory.getLogger(PricingEngineService.class);
@@ -46,53 +43,47 @@ public class PricingEngineService {
     private volatile String lastTransactionKey = null;
 
     /**
-     * Calculate pricing and generate quotes from Opportunities contained in the Salesforce CDC event data
-     * @param request
-     * @param httpServletRequest
-     * @return
+     * Process Salesforce CDC events received from Pub/Sub API subscription
+     * Called directly by SalesforcePubSubSubscriber service
+     * @param changeEvent The CDC event containing Opportunity change data
      */
-    @PostMapping("/generatequotes")
-    public void generatequotes(@RequestBody CloudEvent cloudEvent) {
-        logger.info("Received CloudEvent: ID: {}, Source: {}, Type: {}", cloudEvent.getId(), cloudEvent.getSource(), cloudEvent.getType());
-        // Extract recordIds from event data per Saleforce CDC event format
-        ChangeDataCaptureEvent changeEvent = extractChangeEvent(cloudEvent);
+    public void processChangeDataCaptureEvent(ChangeDataCaptureEvent changeEvent) {
+        logger.info("Processing CDC event for entity: {}, changeType: {}", 
+                   changeEvent.ChangeEventHeader.entityName, 
+                   changeEvent.ChangeEventHeader.changeType);
+        
         if (changeEvent == null || changeEvent.ChangeEventHeader == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid CDC event format.");
+            logger.error("Invalid CDC event format - missing header");
+            return;
         }
+        
         // Extract transactionKey and buffer record changes to allow for optimal job processing (flush buffer every 15 seconds)
         String transactionKey = changeEvent.ChangeEventHeader.transactionKey;
         String[] recordIds = changeEvent.ChangeEventHeader.recordIds;
+        
         if (transactionKey == null || recordIds == null) {
             logger.warn("TransactionKey or recordIds are missing in the event.");
+            return;
         }
+        
         processTransactionKey(transactionKey, recordIds);
-        logger.info("Handled CloudEvent: ID: {}", cloudEvent.getId());
+        logger.info("Processed CDC event with transaction key: {}", transactionKey);
     }
 
     /**
      * Starts a job to create a large number of Opportunity records.
      */
-    @PostMapping("/data/create")
-    public Mono<DataJobResponse> datacreate(@RequestParam(defaultValue = "100") Integer numberOfOpportunities) {
-        logger.info("Received Opportunity data creation request to create {} Opportunities", numberOfOpportunities);
-        // Submit the job to the queue
-        String jobId = enqueueJob("dataQueue", "create:" + numberOfOpportunities);
-        DataJobResponse response = new DataJobResponse();
-        response.jobId = jobId;
-        return Mono.just(response);
+    public String createSampleData(Integer numberOfOpportunities) {
+        logger.info("Creating {} sample Opportunities", numberOfOpportunities);
+        return enqueueJob("dataQueue", "create:" + numberOfOpportunities);
     }
 
     /**
      * Starts a job to delete generated Quotes.
      */
-    @PostMapping("/data/delete")
-    public Mono<DataJobResponse> datadelete() {
-        logger.info("Received Quote data deletion request");
-        // Submit the job to the queue
-        String jobId = enqueueJob("dataQueue", "delete");
-        DataJobResponse response = new DataJobResponse();
-        response.jobId = jobId;
-        return Mono.just(response);
+    public String deleteSampleData() {
+        logger.info("Deleting sample Quote data");
+        return enqueueJob("dataQueue", "delete");
     }
 
     /**
@@ -138,30 +129,9 @@ public class PricingEngineService {
         }
     }
 
-    /**
-     * Parse the CloudEvent to extract the Salesforce ChangeDataCaptureEvent and header informaiton about the records that have changed
-     * @param cloudEvent
-     * @return
-     */
-    private ChangeDataCaptureEvent extractChangeEvent(CloudEvent cloudEvent) {
-        try {
-            byte[] data = cloudEvent.getData().toBytes();
-            if (data != null) {
-                return objectMapper.readValue(new String(data, StandardCharsets.UTF_8), ChangeDataCaptureEvent.class);
-            }
-        } catch (Exception e) {
-            logger.error("Error processing CloudEvent data: {}", e.getMessage(), e);
-        }
-        return null;
-    }
 
-    /**
-     * Response includes the unique job ID processing the request.
-     */
-    public static class DataJobResponse {
-        // Unique job ID for tracking the worker process
-        public String jobId;
-    }
+
+
 
     /**
      * Enqueue the job by posting a message to the given channel along with Salesforce connection details
@@ -177,7 +147,7 @@ public class PricingEngineService {
         PartnerConnection connection = salesforceClient.getConnections().values().iterator().next();
         if (connection == null) {
             logger.error("Salesforce connection is not available.");
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Salesforce connection is not available.");
+            throw new RuntimeException("Salesforce connection is not available.");
         }
         try {
             // Store session info in Redis for the worker to use
@@ -191,35 +161,9 @@ public class PricingEngineService {
 
         } catch (Exception e) {
             logger.error("Error interacting with Redis: {}", e.getMessage(), e);
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to process the request due to an internal error.");
+            throw new RuntimeException("Failed to process the request due to an internal error.", e);
         }
         return jobId;
     }
 
-    /**
-     * General purpose class represneting ChangeDataCaptureEvent passed in the 'data' portion of the CloudEvent
-     * https://developer.salesforce.com/docs/atlas.en-us.254.0.change_data_capture.meta/change_data_capture/cdc_message_structure.htm
-     */
-    private static class ChangeDataCaptureEvent {
-        public ChangeEventHeader ChangeEventHeader;
-    }        
-    /**
-     * General purpose class represneting ChangeEventHeader data
-     * https://developer.salesforce.com/docs/atlas.en-us.254.0.change_data_capture.meta/change_data_capture/cdc_message_structure.htm
-     */
-    @SuppressWarnings("unused")        
-    private static class ChangeEventHeader {
-        public String entityName;
-        public String[] recordIds;
-        public String changeType;
-        public String changeOrigin;
-        public String transactionKey;
-        public Integer sequenceNumber;
-        public Long commitTimestamp;
-        public Long commitNumber;
-        public String commitUser;
-        public String[] nulledFields;
-        public String[] diffFields;
-        public String[] changedFields;        
-    }
 }
