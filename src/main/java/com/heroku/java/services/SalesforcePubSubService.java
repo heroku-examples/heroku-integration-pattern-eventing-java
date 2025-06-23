@@ -1,6 +1,5 @@
 package com.heroku.java.services;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.heroku.java.config.SalesforceClient;
 import com.heroku.java.model.ChangeDataCaptureEvent;
 import com.salesforce.eventbus.protobuf.*;
@@ -57,9 +56,6 @@ public class SalesforcePubSubService {
 
     @Autowired
     private PricingEngineService pricingEngineService;
-
-    @Autowired
-    private ObjectMapper objectMapper;
 
     private ManagedChannel channel;
     private volatile boolean isSubscribed = false;

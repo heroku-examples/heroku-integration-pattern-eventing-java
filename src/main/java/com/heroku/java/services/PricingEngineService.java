@@ -1,6 +1,5 @@
 package com.heroku.java.services;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.heroku.java.config.SalesforceClient;
 import com.heroku.java.model.ChangeDataCaptureEvent;
 import com.sforce.soap.partner.PartnerConnection;
@@ -29,9 +28,6 @@ public class PricingEngineService {
 
     @Autowired
     private SalesforceClient salesforceClient;
-
-    @Autowired
-    private ObjectMapper objectMapper;
 
     /**
      * Be sure to use a shared state for buffering when scaling the web process horizontally
