@@ -2,9 +2,9 @@ Heroku Integration - Using Eventing to drive Automation and Communication (Java)
 ================================================================================
 
 > [!IMPORTANT]
-> For use with the Heroku Integration and Heroku Eventing pilots only
+> For use with Heroku AppLink and Heroku Eventing pilots only
 
-This sample extends the [batch job sample](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) by adding the ability to use eventing to start the work and notify users once it completes using [Custom Notifications](https://help.salesforce.com/s/articleView?id=platform.notif_builder_custom.htm&type=5). These notifications are sent to the user's desktop or mobile device running Salesforce Mobile. Flow is used in this sample to demonstrate how processing can be handed off to low-code tools such as Flow.
+This sample extends the [batch job sample](https://github.com/heroku-examples/heroku-applink-pattern-org-job-java) by adding the ability to use eventing to start the work and notify users once it completes using [Custom Notifications](https://help.salesforce.com/s/articleView?id=platform.notif_builder_custom.htm&type=5). These notifications are sent to the user's desktop or mobile device running Salesforce Mobile. Flow is used in this sample to demonstrate how processing can be handed off to low-code tools such as Flow.
 
 # Architecture Overview
 
@@ -12,7 +12,7 @@ The scenario used in this sample illustrates a basis for processing small to lar
 
 <img src="images/arch.jpg" width="90%">
 
-This sample in contrast to the [Scaling Batch Jobs with Heroku - Java](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) sample uses event based patterns to control processing rather than explicit user invocation to start the bulk job. The result is that work is processed as needed rather than in batch. The choice over streaming execution vs batch execution of your workloads depends on your use case needs, some businesses needs prefer data to change periodically vs ongoing for example financial month end or year end calculations.
+This sample in contrast to the [Scaling Batch Jobs with Heroku - Java](https://github.com/heroku-examples/heroku-applink-pattern-org-job-java) sample uses event based patterns to control processing rather than explicit user invocation to start the bulk job. The result is that work is processed as needed rather than in batch. The choice over streaming execution vs batch execution of your workloads depends on your use case needs, some businesses needs prefer data to change periodically vs ongoing for example financial month end or year end calculations.
 
 Technically speaking, this sample shares much of the same setup as the one mentioned above, as it is even more important for web hooks receiving events to respond quickly. As such it also includes two process types `web` and `worker`, both can be scaled vertically and horizontally to speed up processing and response times. The `web` process will receive API calls from Salesforce and `worker` will execute the jobs asynchronously. A [Heroku Key Value Store](https://elements.heroku.com/addons/heroku-redis) is used to create means to communicate between the two processes.
 
@@ -24,11 +24,11 @@ Technically speaking, this sample shares much of the same setup as the one menti
 - Heroku Integration Pilot enabled
 - Heroku Eventing Pilot enabled
 - Heroku CLI installed
-- Heroku Integration Pilot CLI plugin is installed
+- Heroku AppLink CLI plugin is installed
 - Heroku Eventing Pilot CLI plugin is installed
 - Salesforce CLI installed
 - Login information for one or more Scratch, Development or Sandbox orgs
-- Watch the [Introduction to the Heroku Integration Pilot for Developers](https://www.youtube.com/watch?v=T5kOGNuTCLE) video 
+- Watch the [Introduction to the Heroku Integration Pilo for Developers](https://www.youtube.com/watch?v=T5kOGNuTCLE) video 
 - Watch the [Introduction to the Heroku Eventing Pilot for Developers](https://www.youtube.com/watch?v=Pvg1m295WA8) video
 
 # Setting up your Salesforce Org
@@ -55,7 +55,7 @@ This section focuses on how to develop and test locally before deploying to Hero
 > [!IMPORTANT]
 > If have deployed the application, as described below and want to return to local development, you may want to destroy it to avoid race conditions since both will share the same job queue, use `heroku destroy`. In real situation you would have a different queue store for developer vs production.
 
-Even though we are running and testing locally, we will still configure required aspects of the **Heroku Eventing** and **Heroku Integration** add-ons to allow the code to authenticate and interact with your Salesforce Org as it would once deployed. Additionally the Heroku Key Value Sore is used to manage a job queue for processing requests sent to the webhook. Start with the following commands to create an empty application, configure the addons and run the sample code locally:
+Even though we are running and testing locally, we will still configure required aspects of the **Heroku Eventing** and **Heroku AppLink** add-ons to allow the code to authenticate and interact with your Salesforce Org as it would once deployed. Additionally the Heroku Key Value Sore is used to manage a job queue for processing requests sent to the webhook. Start with the following commands to create an empty application, configure the addons and run the sample code locally:
 
 ```
 heroku create
@@ -235,7 +235,7 @@ Salesforce transmits a `transactionKey` with each Salesforce CDC event that has 
 
 # Technical Information
 
-- Events sent to this application do not contain any authentication information. As such the **Heroku Integration** add-on is used above. Notably the `--store-as-run-as-user` CLI parameter is used when connecting the Salesforce org. This allows the worker jobs to request a Salesforce org authentication for their processing. Note that in constrast with the [batch job sample](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) this user is not necessarily the user that triggered the events. It is important to ensure the user used has all the applicable permissions to perform the work required.
+- Events sent to this application do not contain any authentication information. As such **Heroku AppLink** is used above. Notably the `--store-as-run-as-user` CLI parameter is used when connecting the Salesforce org. This allows the worker jobs to request a Salesforce org authentication for their processing. Note that in constrast with the [batch job sample](https://github.com/heroku-examples/heroku-applink-pattern-org-job-java) this user is not necessarily the user that triggered the events. It is important to ensure the user used has all the applicable permissions to perform the work required.
 - Events are not filtered in this sample, so any changes to **Opportunities** result in events triggering **Quote** generation. For example one could configure the subscription to only forward/stream events to the web hook when the `StageName` is of a certain value, e.g. `Proposal/Quote`. For more information see [here](https://devcenter.heroku.com/articles/getting-started-heroku-events#subscribe-to-platform-events-in-salesforce) and [here](https://devcenter.heroku.com/articles/heroku-events-cli#heroku-events-subscriptions-salesforce-create).
 - [Spring Boot Webflux](https://docs.spring.io/spring-framework/refernce/web/webflux.html) is used in this sample to allow for optimal use of compute resources for dispatching requests to the worker. This is a highly optimal way to implement Web Hooks that do minimal work in order to enqueue or buffer work. 
 - The class `PricingEngineService` implements the Web Hook that receives the subscribed Salesforce CDC events. It contains logic to group CDC events by their `transactionKey` and buffer them until events are received for a different transaction or 15 seconds have passed. The implementation of this approach is not designed for production, as it makes assumptions about the processing taking place in only one instance (Dyno) of the web worker. To implement this for production where by multiple web workers might be scaled up, a shared state approach should be used such as Redis to manage the buffer - precise details of this approach is outside the scope of this article. To learn more about `transactionKey` and best practices for handling it refer to [this](https://developer.salesforce.com/docs/atlas.en-us.change_data_capture.meta/change_data_capture/cdc_replication_steps.htm) article.
@@ -248,7 +248,7 @@ Other Samples
 
 | Sample | What it covers? |
 | ------ | --------------- |
-| [Salesforce API Access - Java](https://github.com/heroku-examples/heroku-integration-pattern-api-access-java) | This sample application showcases how to extend a Heroku web application by integrating it with Salesforce APIs, enabling seamless data exchange and automation across multiple connected Salesforce orgs. It also includes a demonstration of the Salesforce Bulk API, which is optimized for handling large data volumes efficiently. |
-| [Extending Apex, Flow and Agentforce - Java](https://github.com/heroku-examples/heroku-integration-pattern-org-action-java) | This sample demonstrates importing a Heroku application into an org to enable Apex, Flow, and Agentforce to call out to Heroku. For Apex, both synchronous and asynchronous invocation are demonstrated, along with securely elevating Salesforce permissions for processing that requires additional object or field access. |
-| [Scaling Batch Jobs with Heroku - Java](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) | This sample seamlessly delegates the processing of large amounts of data with significant compute requirements to Heroku Worker processes. It also demonstrates the use of the Unit of Work aspect of the SDK (JavaScript only for the pilot) for easier utilization of the Salesforce Composite APIs. |
-| [Using Eventing to drive Automation and Communication](https://github.com/heroku-examples/heroku-integration-pattern-eventing-java) | This sample extends the batch job sample by adding the ability to use eventing to start the work and notify users once it completes using Custom Notifications. These notifications are sent to the user's desktop or mobile device running Salesforce Mobile. Flow is used in this sample to demonstrate how processing can be handed off to low-code tools such as Flow. |
+| [Salesforce API Access - Java](https://github.com/heroku-examples/heroku-applink-pattern-api-access-java) | This sample application showcases how to extend a Heroku web application by integrating it with Salesforce APIs, enabling seamless data exchange and automation across multiple connected Salesforce orgs. It also includes a demonstration of the Salesforce Bulk API, which is optimized for handling large data volumes efficiently. |
+| [Extending Apex, Flow and Agentforce - Java](https://github.com/heroku-examples/heroku-applink-pattern-org-action-java) | This sample demonstrates importing a Heroku application into an org to enable Apex, Flow, and Agentforce to call out to Heroku. For Apex, both synchronous and asynchronous invocation are demonstrated, along with securely elevating Salesforce permissions for processing that requires additional object or field access. |
+| [Scaling Batch Jobs with Heroku - Java](https://github.com/heroku-examples/heroku-applink-pattern-org-job-java) | This sample seamlessly delegates the processing of large amounts of data with significant compute requirements to Heroku Worker processes. It also demonstrates the use of the Unit of Work aspect of the SDK (JavaScript only for the pilot) for easier utilization of the Salesforce Composite APIs. |
+| [Using Eventing to drive Automation and Communication](https://github.com/heroku-examples/heroku-applink-pattern-eventing-java) | This sample extends the batch job sample by adding the ability to use eventing to start the work and notify users once it completes using Custom Notifications. These notifications are sent to the user's desktop or mobile device running Salesforce Mobile. Flow is used in this sample to demonstrate how processing can be handed off to low-code tools such as Flow. |
