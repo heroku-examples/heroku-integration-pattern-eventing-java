@@ -94,13 +94,13 @@
         <dependency>
             <groupId>org.apache.avro</groupId>
             <artifactId>avro</artifactId>
-            <version>1.11.3</version>
+            <version>1.11.4</version>
         </dependency>
         <!-- Salesforce Pub/Sub API proto definitions -->
         <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
-            <version>3.24.4</version>
+            <version>3.25.5</version>
         </dependency>
         <!-- Required for generated protobuf code -->
         <dependency>
