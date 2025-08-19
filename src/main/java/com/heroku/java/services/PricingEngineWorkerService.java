@@ -1,7 +1,6 @@
 package com.heroku.java.services;
 
-import com.heroku.java.config.HerokuEventsClient;
-import com.sforce.soap.partner.Connector;
+import com.heroku.java.config.SalesforceClient;
 import com.sforce.soap.partner.PartnerConnection;
 import com.sforce.soap.partner.QueryResult;
 import com.sforce.soap.partner.SaveResult;
@@ -47,7 +46,7 @@ public class PricingEngineWorkerService implements MessageListener {
     private RedisConnectionFactory redisConnectionFactory;
 
     @Autowired
-    private HerokuEventsClient herokuEventsClient;
+    private SalesforceClient salesforceClient;
 
     @PostConstruct
     public void subscribeToRedisQueue() throws InterruptedException {
@@ -84,12 +83,10 @@ public class PricingEngineWorkerService implements MessageListener {
         logger.info("Worker executing batch for Job ID: {} with WHERE clause: {}", jobId, recordIds.toString());
 
         try {
-            // Recreate Salesforce connection
-            String sessionId = redis.opsForValue().get("salesforce:session:" + jobId);
-            String instanceUrl = redis.opsForValue().get("salesforce:instance:" + jobId);
-            PartnerConnection connection = createSalesforceConnection(sessionId, instanceUrl);
+            // Get fresh Salesforce connection using SalesforceClient
+            PartnerConnection connection = salesforceClient.getConnections().values().iterator().next();
             if (connection == null) {
-                logger.error("Failed to reconnect to Salesforce for Job ID: {}", jobId);
+                logger.error("Failed to get Salesforce connection for Job ID: {}", jobId);
                 return;
             }
 
@@ -185,12 +182,19 @@ public class PricingEngineWorkerService implements MessageListener {
                 }
             }
 
-            // Step 6: Send notificaiton back to the Salesforce Org            
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("Status__c", Map.of("string", String.format("Quotes Generated: %s", quoteSaveResults.size())));
-            payload.put("CreatedById", connection.getUserInfo().getUserId());
-            payload.put("CreatedDate", System.currentTimeMillis());        
-            herokuEventsClient.publish(payload, "QuoteGenerationComplete");
+            // Step 6: Send platform event notification
+            try {
+                SObject platformEvent = new SObject("QuoteGenerationComplete__e");
+                platformEvent.setField("Status__c", "Quotes Generated: " + quoteSaveResults.size());
+                SaveResult[] eventResults = connection.create(new SObject[]{platformEvent});
+                if (eventResults[0].isSuccess()) {
+                    logger.info("Platform event sent successfully: QuoteGenerationComplete__e");
+                } else {
+                    logger.error("Failed to send platform event: {}", eventResults[0].getErrors()[0].getMessage());
+                }
+            } catch (Exception e) {
+                logger.error("Error sending platform event: {}", e.getMessage(), e);
+            }
 
             logger.info("Job processing completed for Job ID: {}", jobId);
 
@@ -199,23 +203,7 @@ public class PricingEngineWorkerService implements MessageListener {
         }
     }
 
-    /**
-     * Creates Salesforce WSC connection
-     * @param sessionId
-     * @param instanceUrl
-     * @return
-     */
-    private PartnerConnection createSalesforceConnection(String sessionId, String instanceUrl) {
-        try {
-            ConnectorConfig config = new ConnectorConfig();
-            config.setServiceEndpoint(instanceUrl);
-            config.setSessionId(sessionId);
-            return Connector.newConnection(config);
-        } catch (Exception e) {
-            logger.error("Error creating Salesforce connection: {}", e.getMessage(), e);
-            return null;
-        }
-    }
+
 
     /**
      * Ensures all records are retrieved by using query more
