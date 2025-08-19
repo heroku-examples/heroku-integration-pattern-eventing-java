@@ -1,10 +1,10 @@
 Heroku AppLink - Using Eventing to drive Automation and Communication (Java)
 ===============================================================================
 
-> [!IMPORTANT]
-> For use with the Heroku AppLink pilot only
 
 This sample extends the [batch job sample](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) by adding the ability to use Salesforce Change Data Capture (CDC) events via the Pub/Sub API to start the work and notify users once it completes using [Custom Notifications](https://help.salesforce.com/s/articleView?id=platform.notif_builder_custom.htm&type=5). These notifications are sent to the user's desktop or mobile device running Salesforce Mobile. Flow is used in this sample to demonstrate how processing can be handed off to low-code tools such as Flow.
+=======
+
 
 # Architecture Overview
 
@@ -12,7 +12,7 @@ The scenario used in this sample illustrates a basis for processing small to lar
 
 <img src="images/arch.jpg" width="90%">
 
-This sample in contrast to the [Scaling Batch Jobs with Heroku - Java](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) sample uses event based patterns to control processing rather than explicit user invocation to start the bulk job. The result is that work is processed as needed rather than in batch. The choice over streaming execution vs batch execution of your workloads depends on your use case needs, some businesses needs prefer data to change periodically vs ongoing for example financial month end or year end calculations.
+This sample in contrast to the [Scaling Batch Jobs with Heroku - Java](https://github.com/heroku-examples/heroku-applink-pattern-org-job-java) sample uses event based patterns to control processing rather than explicit user invocation to start the bulk job. The result is that work is processed as needed rather than in batch. The choice over streaming execution vs batch execution of your workloads depends on your use case needs, some businesses needs prefer data to change periodically vs ongoing for example financial month end or year end calculations.
 
 Technically speaking, this sample shares much of the same setup as the one mentioned above, as it is even more important for streaming event processing to respond quickly. As such it also includes two process types `web` and `worker`, both can be scaled vertically and horizontally to speed up processing and response times. The `web` process will receive CDC events via the Salesforce Pub/Sub API and `worker` will execute the jobs asynchronously. A [Heroku Key Value Store](https://elements.heroku.com/addons/heroku-redis) is used to create means to communicate between the two processes.
 
@@ -25,6 +25,7 @@ Technically speaking, this sample shares much of the same setup as the one menti
 - Heroku AppLink plugin is installed
 - Salesforce CLI installed
 - Login information for one or more Scratch, Development or Sandbox orgs
+
 
 # Setting up your Salesforce Org
 
@@ -51,6 +52,8 @@ This section focuses on how to develop and test locally before deploying to Hero
 > If have deployed the application, as described below and want to return to local development, you may want to destroy it to avoid race conditions since both will share the same job queue, use `heroku destroy`. In real situation you would have a different queue store for developer vs production.
 
 Even though we are running and testing locally, we will still configure required aspects of the **Heroku AppLink** add-on to allow the code to authenticate and interact with your Salesforce Org as it would once deployed. Additionally the Heroku Key Value Store is used to manage a job queue for processing requests. Start with the following commands to create an empty application, configure the addons and run the sample code locally:
+=======
+
 
 ```
 heroku create
@@ -221,6 +224,7 @@ Salesforce transmits a `transactionKey` with each Salesforce CDC event that has 
 
 # Technical Information
 
+
 - The application connects directly to the Salesforce Pub/Sub API using gRPC to receive Change Data Capture events in real-time. The **Heroku AppLink** add-on is used for authentication. This allows the worker jobs to request a Salesforce org authentication for their processing. Note that in constrast with the [batch job sample](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) this user is not necessarily the user that triggered the events. It is important to ensure the user used has all the applicable permissions to perform the work required.
 - Events are not filtered in this sample, so any changes to **Opportunities** result in CDC events triggering **Quote** generation. The Pub/Sub API supports filtering, so you could configure the subscription to only process events when the `StageName` is of a certain value, e.g. `Proposal/Quote`. This would be implemented in the `SalesforcePubSubService` class.
 - [Spring Boot](https://spring.io/projects/spring-boot) is used in this sample to provide a robust web application framework for managing the Pub/Sub subscription and job processing.
@@ -228,12 +232,15 @@ Salesforce transmits a `transactionKey` with each Salesforce CDC event that has 
 - The class `PricingEngineService.java` contains logic to bulk create and destroy Opportunities. This logic is used for testing the sample with sample data creation and cleanup. It also batches up work for more optimal bulk processing within one transaction of CDC events received from Salesforce.
 - The `CONNECTION_NAMES` environment variable is used by this sample to provide the alias of the connected Salesforce org given to the `salesforce:authorizations:add` command. See `SalesforceClient.java` for how its handled.
 
+
 Other Samples
 -------------
 
 | Sample | What it covers? |
 | ------ | --------------- |
+
 | [Salesforce API Access - Java](https://github.com/heroku-examples/heroku-integration-pattern-api-access-java) | This sample application showcases how to extend a Heroku web application by integrating it with Salesforce APIs, enabling seamless data exchange and automation across multiple connected Salesforce orgs. It also includes a demonstration of the Salesforce Bulk API, which is optimized for handling large data volumes efficiently. |
 | [Extending Apex, Flow and Agentforce - Java](https://github.com/heroku-examples/heroku-integration-pattern-org-action-java) | This sample demonstrates importing a Heroku application into an org to enable Apex, Flow, and Agentforce to call out to Heroku. For Apex, both synchronous and asynchronous invocation are demonstrated, along with securely elevating Salesforce permissions for processing that requires additional object or field access. |
 | [Scaling Batch Jobs with Heroku - Java](https://github.com/heroku-examples/heroku-integration-pattern-org-job-java) | This sample seamlessly delegates the processing of large amounts of data with significant compute requirements to Heroku Worker processes. It also demonstrates the use of the Unit of Work aspect of the SDK (JavaScript only for the pilot) for easier utilization of the Salesforce Composite APIs. |
 | [Using Eventing to drive Automation and Communication - Java](https://github.com/heroku-examples/heroku-integration-pattern-eventing-java) | This sample extends the batch job sample by adding the ability to use Salesforce Change Data Capture events via the Pub/Sub API to start the work and notify users once it completes using Custom Notifications. These notifications are sent to the user's desktop or mobile device running Salesforce Mobile. Flow is used in this sample to demonstrate how processing can be handed off to low-code tools such as Flow. |
+=======
